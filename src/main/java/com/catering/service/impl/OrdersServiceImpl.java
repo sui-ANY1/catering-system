@@ -4,6 +4,7 @@ import java.util.concurrent.TimeUnit;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.catering.dto.CartItem;
 import com.catering.entity.*;
 import com.catering.mapper.*;
 import com.catering.service.OrdersService;
@@ -50,10 +51,10 @@ public class OrdersServiceImpl
         }
 
         try {
-            // 1. 校验桌台
+            // 1. 校验桌台（仅维修状态不可用，占用中允许追加点餐）
             DiningTable table = tableMapper.selectById(tableId);
-            if (table == null || table.getStatus() != 0) {
-                throw new RuntimeException("桌台不可用");
+            if (table == null || table.getStatus() == 2) {
+                throw new RuntimeException("桌台不可用（维修中）");
             }
 
             // 2. 从 Redis 取购物车
@@ -76,28 +77,32 @@ public class OrdersServiceImpl
             mapper.registerModule(new JavaTimeModule());
 
             for (Object value : cartMap.values()) {
-                Dish dish = mapper.convertValue(value, Dish.class);
+                CartItem item = mapper.convertValue(value, CartItem.class);
+                int quantity = (item.getQuantity() == null || item.getQuantity() < 1)
+                        ? 1 : item.getQuantity();
 
-                Dish dbDish = dishMapper.selectById(dish.getId());
+                Dish dbDish = dishMapper.selectById(item.getDishId());
                 if (dbDish == null || dbDish.getStatus() == 0) {
-                    throw new RuntimeException("菜品【" + dish.getName() + "】已下架");
+                    throw new RuntimeException("菜品【" + item.getName() + "】已下架");
                 }
-                if (dbDish.getStock() < 1) {
-                    throw new RuntimeException("菜品【" + dish.getName() + "】库存不足");
+                if (dbDish.getStock() < quantity) {
+                    throw new RuntimeException("菜品【" + item.getName() + "】库存不足");
                 }
-                dbDish.setStock(dbDish.getStock() - 1);
-                dbDish.setSales(dbDish.getSales() + 1);
+                dbDish.setStock(dbDish.getStock() - quantity);
+                dbDish.setSales(dbDish.getSales() + quantity);
                 dishMapper.updateById(dbDish);
 
+                BigDecimal totalPrice = item.getPrice().multiply(BigDecimal.valueOf(quantity));
+
                 OrderDetail detail = new OrderDetail();
-                detail.setDishId(dish.getId());
-                detail.setDishName(dish.getName());
-                detail.setPrice(dish.getPrice());
-                detail.setQuantity(1);
-                detail.setTotalPrice(dish.getPrice());
+                detail.setDishId(item.getDishId());
+                detail.setDishName(item.getName());
+                detail.setPrice(item.getPrice());
+                detail.setQuantity(quantity);
+                detail.setTotalPrice(totalPrice);
                 details.add(detail);
 
-                totalAmount = totalAmount.add(dish.getPrice());
+                totalAmount = totalAmount.add(totalPrice);
             }
 
             // 5. 创建订单
@@ -117,9 +122,11 @@ public class OrdersServiceImpl
                 orderDetailMapper.insert(detail);
             }
 
-            // 7. 修改桌台状态
-            table.setStatus(1);
-            tableMapper.updateById(table);
+            // 7. 桌台空闲时才置为占用（占用中追加点餐不重复变更）
+            if (table.getStatus() == 0) {
+                table.setStatus(1);
+                tableMapper.updateById(table);
+            }
 
             // 8. 清空购物车
             redisTemplate.delete(cartKey);

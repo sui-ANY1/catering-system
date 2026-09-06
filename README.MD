@@ -98,7 +98,7 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/catering?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
     username: root
-    password: 你的密码
+    password: ${MYSQL_PASSWORD}
   data:
     redis:
       host: localhost
@@ -148,7 +148,7 @@ try {
 
 3. BCrypt 密码加密
 用户密码加密存储，登录时使用 BCrypt.checkpw() 校验。
-
+__
 4. Sa-Token 统一认证
 自定义拦截器，对所有接口进行登录校验，白名单放行登录和文档路径。
 
